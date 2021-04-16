@@ -13,6 +13,21 @@
 # limitations under the License.
 
 installed_devices = []
+#bme280 has been installed in SentinAir on 2020-12-15_10-00-51
+# do not remove or modify the next three lines below!!!
+from devices.bme280 import Bme280
+bme280_obj = Bme280()
+installed_devices.append(bme280_obj)
+#mcp342x has been installed in SentinAir on 2020-11-02_11-55-33
+# do not remove or modify the next three lines below!!!
+from devices.mcp342x import Mcp342x
+mcp342x_obj = Mcp342x()
+installed_devices.append(mcp342x_obj)
+#bh1750 has been installed in SentinAir on 2020-11-02_11-55-19
+# do not remove or modify the next three lines below!!!
+from devices.bh1750 import Bh1750
+bh1750_obj = Bh1750()
+installed_devices.append(bh1750_obj)
 #v72m has been installed in SentinAir on 2020-07-31_04-48-53
 # do not remove or modify the next three lines below!!!
 from devices.v72m import V72m
@@ -97,6 +112,7 @@ DATA_DIR = "/var/www/html/data"
 IMG_DIR = "/var/www/html/img"
 LOG_FILENAME = '/var/www/html/log/sentinair-log.txt'
 IMAP_SMTP_FILE = "/home/pi/sentinair/imap-smtp-interface.py"
+MAIL_CONFIG_FILE = "/home/pi/sentinair/mail-config.sentinair"
 
 #connection types of devices
 USB_CONNECTION_TYPE = "usb"
@@ -128,6 +144,7 @@ AVG_INIT_ERR_LOG_MSG = 'Error in calculating means on init:'
 AVG_HOUR_ERR_LOG_MSG = 'Error in calculating hourly means:'
 AVG_DAY_ERR_LOG_MSG = 'Error in calculating daily means:'
 DATA_PORT_OPEN_ERR_LOG_MSG = "Udp data port opening failed"
+MAIL_CONFIG_NULL_LOG_MSG = "E-mail account is not present: the imap-smtp interface will not start"
 
 INIT_MSG = "\n\n" + INIT_LOG_MSG + "\n"
 UDP_CLI_PORT_ERR_MSG = "\n" + UDP_CLI_PORT_ERR_LOG_MSG + "\n"
@@ -136,11 +153,12 @@ UDP_CLI_PORT_ERR_MSG = "\n" + UDP_CLI_PORT_ERR_LOG_MSG + "\n"
 DATA_SERVER_ERR_MSG = "\n" + DATA_SERVER_ERR_LOG_MSG + "\n"
 DATA_SERVER_PORT_ERR_MSG = "\n" + DATA_SERVER_PORT_ERR_LOG_MSG + "\n"
 DATA_SENDING_ERR_MSG = "\n" + DATA_SENDING_ERR_LOG_MSG + "\n"
-DATA_FILE_OPENING_ERR = "Impossible opening storage data file. Measurement sesssion stopped with error"
-MEAS_STOP_ERR_MSG = "Measurement session stopped with error"
+DATA_FILE_OPENING_ERR = "\nImpossible opening storage data file. Measurement sesssion stopped with error"
+MEAS_STOP_ERR_MSG = "\nMeasurement session stopped with error"
 SYS_READY = "\n" + SYS_READY_LOG_MSG + "\n"
-INV_CMD = "Command not valid!\n"
-DATA_PORT_OPEN_ERR_MSG = DATA_PORT_OPEN_ERR_LOG_MSG + "\n"
+INV_CMD = "\nCommand not valid!\n"
+DATA_PORT_OPEN_ERR_MSG = "\n" + DATA_PORT_OPEN_ERR_LOG_MSG + "\n"
+MAIL_CONFIG_NULL = "\nE-mail account is not present: the imap-smtp interface will not start\n"
 
 
 ERRS_STR = "Impossible to execute the command:\n" +\
@@ -189,10 +207,11 @@ def plotter(heads):
     prevlend = 0
     fileh1 = curfile.rstrip(".txt")
     fileh = fileh1 + "_hourlymeans.txt"
-    filed = fileh1 + "_dailymeans.txt"
+    filed = fileh1 + "_dailymeans.txt"    
     while(rate!=0):
         nowlen = len(datacols[0])
         if (nowlen > 1) and (prevlen != nowlen):
+            plot_file(curfile,heads)
             if rate == 0:
                 datacols = []
                 return
@@ -213,7 +232,6 @@ def plotter(heads):
                 datacolsd = []
                 return
         prevlend = nowlend
-
 
 #routine for plotting data of the measurements file
 def plot_file(filename,header):
@@ -518,6 +536,9 @@ def mean_daily(dprev,dnow,stepdn,smd,rec,fh,el):
 ## devices scanning: this routine search devices and the ports where they are plugged into.
 ## Then it creates the connections
 def device_scanning(conn_dev,dev,sk1,ser1,flag):
+    global fault
+    #resetting the fault alarm
+    fault = False
     # number of magnitudes to acquire
     num_mag = 0
     for cn in conn_dev:
@@ -528,44 +549,56 @@ def device_scanning(conn_dev,dev,sk1,ser1,flag):
         conn_type = dve.getConnectionType()
         if (conn_type != USB_CONNECTION_TYPE) and (conn_type != SERIAL_CONNECTION_TYPE):
             conn_par = dve.getConnectionParams()
-            if flag != 0:
-                send_output("\nSearching for " + dve.getDeviceType() + " on " + conn_par[0],sk1,ser1)
-            else:
-                print ("\nSearching for " + dve.getDeviceType() + " on " + conn_par[0])
-            conn_dev.append(copy.deepcopy(dve))
-            if conn_dev[-1].connect() == 1:
-                sens = conn_dev[-1].getSensors()
-                meas = conn_dev[-1].sample()
-                num_sens = sens.split(';')
-                num_meas = meas.split(';')
-                if len(num_sens) != len(num_meas):
-                    conn_dev[-1].terminate()
+            for address in conn_par:
+                if conn_type == I2C_CONNECTION_TYPE:
+                    address_to_check = hex(address)
+                else:
+                    address_to_check = address
+                if flag != 0:
+                    send_output("\nSearching for " + dve.getIdentity() + " on " + address_to_check + " ",sk1,ser1)
+                else:
+                    print ("\nSearching for " + dve.getIdentity() + " on " + address_to_check)
+                    logging.info("Searching for " + dve.getIdentity() + " on " + address_to_check)
+                conn_dev.append(copy.deepcopy(dve))
+                if conn_dev[-1].connect(address) == 1:
+                    sens = conn_dev[-1].getSensors()
+                    meas = conn_dev[-1].sample()
+                    num_sens = sens.split(';')
+                    num_meas = meas.split(';')
+                    if len(num_sens) != len(num_meas):
+                        conn_dev[-1].terminate()
+                        del conn_dev[-1]
+                        continue
+                    if flag != 0:
+                        send_output("FOUND " + conn_dev[-1].getIdentity(),sk1,ser1)
+                        send_output("measures: " + conn_dev[-1].getSensors(),sk1,ser1)
+                    else:
+                        print ("FOUND " + conn_dev[-1].getIdentity())
+                        print ("measures: " + conn_dev[-1].getSensors())
+                        logging.info("FOUND " + conn_dev[-1].getIdentity() + "; " + "measures: " + conn_dev[-1].getSensors())
+                    #updating the number of magnitudes to acquire
+                    num_mag = num_mag + len(num_sens)
+                    #updating device identity for multi-copies purposes
+                    original_identity = conn_dev[-1].getIdentity()
+                    conn_dev[-1].setIdentity(original_identity + "-" + address_to_check)
+                else:
+                    if flag != 0:
+                        send_output(dve.getIdentity() + " NOT FOUND",sk1,ser1)           
+                    else:
+                        print (dve.getIdentity() + " NOT FOUND")
+                        logging.info(dve.getIdentity() + " NOT FOUND")
                     del conn_dev[-1]
                     continue
-                if flag != 0:
-                    send_output("FOUND " + conn_dev[-1].getIdentity(),sk1,ser1)
-                    send_output("measures: " + conn_dev[-1].getSensors(),sk1,ser1)
-                else:
-                    print ("FOUND " + conn_dev[-1].getIdentity())
-                    print ("measures: " + conn_dev[-1].getSensors())
-                #updating the number of magnitudes to acquire
-                num_mag = num_mag + len(num_sens)
-            else:
-                if flag != 0:
-                    send_output(dve.getDeviceType() + " NOT FOUND",sk1,ser1)           
-                else:
-                    print (dve.getDeviceType() + " NOT FOUND")              
-                del conn_dev[-1]
-                continue
     ports = list(serial.tools.list_ports.comports())
     for prt in ports:
         for dv in dev:
             conn_type = dv.getConnectionType()
             if (conn_type == USB_CONNECTION_TYPE) or (conn_type == SERIAL_CONNECTION_TYPE):
                 if flag != 0:
-                    send_output("\nSearching for " + dv.getDeviceType() + " on " + prt[0] + " port",sk1,ser1)
+                    send_output("\nSearching for " + dv.getIdentity() + " on " + prt[0] + " port",sk1,ser1)
                 else:
-                    print ("\nSearching for " + dv.getDeviceType() + " on " + prt[0] + " port")
+                    print ("\nSearching for " + dv.getIdentity() + " on " + prt[0] + " port")
+                    logging.info("Searching for " + dv.getIdentity() + " on " + prt[0] + " port")
                 conn_dev.append(copy.deepcopy(dv))
                 if conn_dev[-1].connect(prt[0]) == 1:
                     sens = conn_dev[-1].getSensors()
@@ -582,14 +615,19 @@ def device_scanning(conn_dev,dev,sk1,ser1,flag):
                     else:
                         print ("FOUND " + conn_dev[-1].getIdentity())
                         print ("measures: " + conn_dev[-1].getSensors())
+                        logging.info("FOUND " + conn_dev[-1].getIdentity() + "; " + "measures: " + conn_dev[-1].getSensors())
                     #updating the number of magnitudes to acquire
                     num_mag = num_mag + len(num_sens)
+                    #updating device identity for multi-copies purposes
+                    original_identity = conn_dev[-1].getIdentity()
+                    conn_dev[-1].setIdentity(original_identity + "-" + prt[0])
                     break
                 else:
                     if flag != 0:
-                        send_output(dv.getDeviceType() + " NOT FOUND",sk1,ser1)           
+                        send_output(dv.getIdentity() + " NOT FOUND",sk1,ser1)           
                     else:
-                        print (dv.getDeviceType() + " NOT FOUND")
+                        print (dv.getIdentity() + " NOT FOUND")
+                        logging.info(dve.getIdentity() + " NOT FOUND")
                     del conn_dev[-1]
             else:
                 continue
@@ -598,6 +636,7 @@ def device_scanning(conn_dev,dev,sk1,ser1,flag):
             send_output("\nNo device connected to SentinAir",sk1,ser1)   
         else:
             print("\nNo device connected to SentinAir")
+            logging.info("No device connected to SentinAir")
     return conn_dev,num_mag
 
 ## getting the devices informations: identity, measurements units, current measurements
@@ -704,19 +743,22 @@ def init_session(conn_dvc,rt):
 def session_closing(sk,fh1,fhmh1,fhmd1,errl):
     global rate
     global measure
+    global fault
     rate = 0
     measure = NO_MEAS
     res = close_file(fh1)
-    GPIO.output(19,GPIO.LOW)
+    GPIO.output(13,GPIO.LOW)
     if errl > 0:
-        GPIO.output(13,GPIO.HIGH)        
+        fault = True
+        _thread.start_new_thread(fault_alarm,())
+    else:
+        fault = False
     if res == 0:
         send_data(sk,"File " + fh1.name + " closed")
         logging.info("File " + fh1.name + " closed")
     else:
         send_data(sk,"Impossible closing " + fh1.name + "\n\nsession stopped with error")
         logging.warning("Impossible closing " + fh1.name + ". session stopped with error")
-        GPIO.output(13,GPIO.HIGH)
     res = close_file(fhmh1)
     if res == 0:
         send_data(sk,"File " + fhmh1.name + " closed")
@@ -741,6 +783,7 @@ def capture(sk,conn_dvc):
     global datacolsd
     global measure
     global curfile
+    global fault
     del datacols[:]
     del datacolsh[:]
     del datacolsd[:]
@@ -753,10 +796,7 @@ def capture(sk,conn_dvc):
     dayprev = time.strftime("%d/%m/%Y")
     hourprev = datetime.now().hour
     ##############################
-    try:
-        GPIO.output(13,GPIO.LOW)
-    except Exception as e:
-        logging.warning(INIT_CAPT_GPIO_ERR_LOG_MSG,exc_info=True)
+    fault = False
     try:
         errorLevel, fh, curfile, fhmh, fhmd, head = init_session(conn_dvc,rate)## builds the measurements record
     except Exception as e:
@@ -766,8 +806,9 @@ def capture(sk,conn_dvc):
         send_data(sk,DATA_FILE_OPENING_ERR) 
         logging.warning(DATA_FILE_OPENING_ERR)
         try:
-            GPIO.output(13,GPIO.HIGH)
-            GPIO.output(19,GPIO.LOW)
+            GPIO.output(13,GPIO.LOW)
+            fault = True
+            _thread.start_new_thread(fault_alarm,())
         except Exception as e:
             logging.warning(INIT_CAPT_GPIO_ERR_LOG_MSG_2,exc_info=True)
         session_closing(sk,fh,fhmh,fhmd,errorLevel) 
@@ -833,7 +874,7 @@ def capture(sk,conn_dvc):
     adesso = time.time()
     res = measure_logging(fh,tolog)
     while(rate!=0):## loop where devices are read if it is the time
-        GPIO.output(19,GPIO.HIGH)
+        GPIO.output(13,GPIO.HIGH)
         dopo = time.time()
         diff = int(dopo-adesso)
         if(diff>=rate):## now it is the time to read the devices, gather and treat the data
@@ -897,17 +938,37 @@ def my_callback(channel):
         return
     try:
         rate = 0
-        GPIO.output(26,GPIO.LOW)
+        GPIO.output(13,GPIO.LOW)
         time.sleep(0.5)
-        GPIO.output(26,GPIO.HIGH)
+        GPIO.output(13,GPIO.HIGH)
         time.sleep(0.5)
-        GPIO.output(26,GPIO.LOW)
+        GPIO.output(13,GPIO.LOW)
         time.sleep(0.5)
-        GPIO.output(26,GPIO.HIGH)
-        logging.warning(SHUTDOWN_BUTTON_PRESSED ,exc_info=True)
+        GPIO.output(13,GPIO.HIGH)
+        logging.warning(SHUTDOWN_BUTTON_PRESSED)
         os.popen("sudo shutdown -h now")
     except Exception as e:
         print ("Shutdown system failed!")
+
+## function to make blink the yellow check light
+def led_blinking():
+    global blink
+    while blink:
+        GPIO.output(13,GPIO.HIGH)
+        time.sleep(0.2)
+        GPIO.output(13,GPIO.LOW)
+        time.sleep(0.2)
+    GPIO.output(13,GPIO.LOW)
+
+## function to make blink the red check light for fault indication
+def fault_alarm():
+    global fault
+    while fault:
+        GPIO.output(26,GPIO.HIGH)
+        time.sleep(0.2)
+        GPIO.output(26,GPIO.LOW)
+        time.sleep(0.2)
+    GPIO.output(26,GPIO.HIGH)
 
 ## function to get started udp socket communications with user interfaces
 def init_consolle():
@@ -957,13 +1018,55 @@ def send_data(sk,data):
         logging.warning(DATA_SENDING_ERR_LOG_MSG,exc_info=True)
 
 
+## function to check if a mail account exists
+def mail_account_check(maf):
+    mail = 0
+    pwd = 0
+    smtp = 0
+    imap = 0
+    try:
+        f = open(maf,"r")
+        lines = f.readlines()
+        for ll in lines:
+            if ll.find("MAIL_ADDRESS")==0:
+                ma = ll.split('"')
+                if ma[1].find("@") > 0:
+                    mail = 1
+            if ll.find("MAIL_PWD")==0:
+                pw = ll.split('"')
+                if pw[1]!= "":
+                    pwd = 1
+            if ll.find("SMTP_SERVER")==0:
+                sm = ll.split('"')
+                if sm[1]!= "":
+                    smtp = 1            
+            if ll.find("IMAP_SERVER")==0:
+                im = ll.split('"')
+                if im[1]!= "":
+                    imap = 1
+        if (mail == 1) and (pwd == 1) and (smtp == 1) and (imap == 1):
+            return 0
+        else:
+            logging.warning(MAIL_CONFIG_NULL_LOG_MSG)
+            print(MAIL_CONFIG_NULL)
+            return 1
+    except Exception as e:
+        logging.warning(MAIL_CONFIG_NULL_LOG_MSG,exc_info=True)
+        print(MAIL_CONFIG_NULL)
+        return 1
+    
+
 
 #### MAIN #######
 global rate
+global blink
+global fault
 datacols = []
 datacolsh = []
 datacolsd = []
 rate = 0
+blink = True
+fault = False
 srv = None
 measure = NO_MEAS
 logging.basicConfig(filename=LOG_FILENAME,level=logging.DEBUG,format='%(asctime)s - %(message)s',datefmt='%d/%m/%Y_%H:%M:%S')
@@ -974,7 +1077,7 @@ print (INIT_MSG)
 try:
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(26,GPIO.OUT)#red
-    GPIO.setup(19,GPIO.OUT)#green
+    #GPIO.setup(19,GPIO.OUT)#green
     GPIO.setup(13,GPIO.OUT)#yellow
     GPIO.output(26,GPIO.HIGH)
     GPIO.setup(17, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -989,8 +1092,10 @@ if sock == None:
     logging.warning("Init command line interface failed!")
 
 #### device connected scanning
+_thread.start_new_thread(led_blinking,())
 number_devices = 0
 connected_devices,number_devices = device_scanning(connected_devices,installed_devices,sock,srv,0)
+blink = False
 # calculating the MINIMUM_SAMPLING_RATE. It depends on the number of devices connected
 if number_devices < 12:
     MINIMUM_SAMPLING_RATE = 30
@@ -1024,11 +1129,12 @@ else:
     logging.info(strlog1)
     _thread.start_new_thread(capture,(skdata,connected_devices))
 
-#### starting imap-smtp interface
-try:
-    os.system("sudo python3 " + IMAP_SMTP_FILE + "&")
-except Exception as e:
-    logging.warning("Imap-smtp interface starting failed:",exc_info=True)
+if mail_account_check(MAIL_CONFIG_FILE) == 0:
+    #### starting imap-smtp interface
+    try:
+        os.system("sudo python3 " + IMAP_SMTP_FILE + "&")
+    except Exception as e:
+        logging.warning("Imap-smtp interface starting failed:",exc_info=True)
 
 
 #### starting operations finished 
@@ -1112,7 +1218,7 @@ while 1:
                             str2 = "please, select a sampling rate greater than " + str(MINIMUM_SAMPLING_RATE) + " seconds or equal!"
                             strout = str1 + str2 + END_STR
                             send_output(strout,sock,srv)
-                    except:
+                    except Exception as e:
                         strout = "ERROR: " + par[1] + " is not a valid number" + END_STR
                         send_output(strout,sock,srv)
                 else:
